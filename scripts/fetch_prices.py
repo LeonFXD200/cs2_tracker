@@ -19,7 +19,7 @@ HEADERS = {
     'Accept-Language': 'en-US,en;q=0.9',
 }
 
-TARGET_ITEMS = 1000
+TARGET_ITEMS = 3000
 
 
 def fetch_steam():
