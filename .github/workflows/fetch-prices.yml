@@ -1,0 +1,30 @@
+name: Fetch CS2 Prices
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 minutes
+  workflow_dispatch:           # allow manual trigger from Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch prices from Skinport
+        run: |
+          curl -sf \
+            -H "Accept: application/json" \
+            "https://api.skinport.com/v1/items?app_id=730&currency=USD" \
+            -o data/prices.json
+
+      - name: Commit if changed
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add data/prices.json
+          git diff --staged --quiet || git commit -m "chore: update prices $(date -u '+%H:%M UTC')"
+          git push

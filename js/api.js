@@ -1,27 +1,31 @@
 // =============================================
-// api.js — Skinport public API with CORS proxy fallback
+// api.js — CS2 price data fetcher
+// Primary: GitHub-hosted JSON (CORS-safe, updated every 15 min by Actions)
+// Fallbacks: CORS proxies for Skinport direct
 // =============================================
 
-const SKINPORT_URL = 'https://api.skinport.com/v1/items?app_id=730&currency=USD';
+const REPO_PRICES_URL = 'https://raw.githubusercontent.com/LeonFXD200/cs2_tracker/main/data/prices.json';
+const SKINPORT_URL    = 'https://api.skinport.com/v1/items?app_id=730&currency=USD';
 
-// Each proxy has its own URL builder and response parser.
-// allorigins /get wraps the response in {contents:"[...]"} — needs JSON.parse on contents.
-// Other proxies return the raw JSON array directly.
-const PROXY_CONFIGS = [
+const SOURCES = [
+  // 1. GitHub-hosted data — raw.githubusercontent.com always has CORS headers
   {
-    build: url => url,
+    build: () => REPO_PRICES_URL + '?_=' + Math.floor(Date.now() / 60000), // 1-min cache bust
     parse: data => data,
   },
+  // 2. allorigins /get — wraps response in {contents: "..."}, needs JSON.parse
   {
-    build: url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+    build: () => `https://api.allorigins.win/get?url=${encodeURIComponent(SKINPORT_URL)}`,
     parse: data => JSON.parse(data.contents),
   },
+  // 3. codetabs proxy — returns raw JSON
   {
-    build: url => `https://api.codetabs.com/v1/proxy?quest=${url}`,
+    build: () => `https://api.codetabs.com/v1/proxy?quest=${SKINPORT_URL}`,
     parse: data => data,
   },
+  // 4. corsproxy.io — returns raw JSON
   {
-    build: url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    build: () => `https://corsproxy.io/?${encodeURIComponent(SKINPORT_URL)}`,
     parse: data => data,
   },
 ];
@@ -37,8 +41,8 @@ async function fetchItems(force = false) {
 
   let lastError;
 
-  for (const config of PROXY_CONFIGS) {
-    const url = config.build(SKINPORT_URL);
+  for (const source of SOURCES) {
+    const url = source.build();
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -48,9 +52,10 @@ async function fetchItems(force = false) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const raw  = await res.json();
-      const data = config.parse(raw);
+      const data = source.parse(raw);
 
       if (!Array.isArray(data)) throw new Error('Response is not an array');
+      if (data.length === 0)    throw new Error('Empty prices array');
 
       _cache = data.filter(
         item => item.suggested_price && item.suggested_price > 0 && item.quantity > 0
@@ -60,11 +65,11 @@ async function fetchItems(force = false) {
 
     } catch (err) {
       lastError = err;
-      // Try next proxy
+      // Try next source
     }
   }
 
-  throw new Error(`Could not fetch market data — all sources failed. Last error: ${lastError?.message}`);
+  throw new Error(`All data sources failed. Last error: ${lastError?.message}`);
 }
 
 function clearApiCache() {
