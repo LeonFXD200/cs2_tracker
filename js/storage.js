@@ -38,6 +38,13 @@ function getDailyBaseline() {
 }
 
 function calculateChange(item, baseline) {
+  // Use inline 7-day price when available (CSGOTrader data) — works on first load
+  if (item.price_7d && item.suggested_price && item.price_7d > 0) {
+    const abs = item.suggested_price - item.price_7d;
+    const pct = (abs / item.price_7d) * 100;
+    return { prev: item.price_7d, abs, pct };
+  }
+  // Fall back to localStorage daily baseline
   if (!baseline || !baseline.prices) return null;
   const prev = baseline.prices[item.market_hash_name];
   if (!prev || !item.suggested_price) return null;
