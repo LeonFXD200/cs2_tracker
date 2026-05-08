@@ -4,11 +4,26 @@
 
 const SKINPORT_URL = 'https://api.skinport.com/v1/items?app_id=730&currency=USD';
 
-// CORS proxy options tried in order
-const PROXIES = [
-  url => url,                                                              // 1. direct
-  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, // 2. allorigins
-  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,              // 3. corsproxy.io
+// Each proxy has its own URL builder and response parser.
+// allorigins /get wraps the response in {contents:"[...]"} — needs JSON.parse on contents.
+// Other proxies return the raw JSON array directly.
+const PROXY_CONFIGS = [
+  {
+    build: url => url,
+    parse: data => data,
+  },
+  {
+    build: url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+    parse: data => JSON.parse(data.contents),
+  },
+  {
+    build: url => `https://api.codetabs.com/v1/proxy?quest=${url}`,
+    parse: data => data,
+  },
+  {
+    build: url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    parse: data => data,
+  },
 ];
 
 let _cache     = null;
@@ -22,8 +37,8 @@ async function fetchItems(force = false) {
 
   let lastError;
 
-  for (const proxyFn of PROXIES) {
-    const url = proxyFn(SKINPORT_URL);
+  for (const config of PROXY_CONFIGS) {
+    const url = config.build(SKINPORT_URL);
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -32,9 +47,10 @@ async function fetchItems(force = false) {
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const data = await res.json();
+      const raw  = await res.json();
+      const data = config.parse(raw);
 
-      if (!Array.isArray(data)) throw new Error('Unexpected response format');
+      if (!Array.isArray(data)) throw new Error('Response is not an array');
 
       _cache = data.filter(
         item => item.suggested_price && item.suggested_price > 0 && item.quantity > 0
@@ -48,7 +64,7 @@ async function fetchItems(force = false) {
     }
   }
 
-  throw new Error(`Could not fetch market data: ${lastError?.message || 'All sources failed'}`);
+  throw new Error(`Could not fetch market data — all sources failed. Last error: ${lastError?.message}`);
 }
 
 function clearApiCache() {
