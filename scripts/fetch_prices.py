@@ -1,99 +1,90 @@
 import json
+import time
 import urllib.request
-import urllib.error
 import sys
 import os
 
-SOURCES = [
-    'https://prices.csgotrader.app/latest/prices_v6.json',
-    'https://cdn.csgotrader.app/prices/prices_v6.json',
-]
-
-SKINPORT_URL = 'https://api.skinport.com/v1/items?app_id=730&currency=USD'
+# Steam Community Market search — public API, no auth needed
+STEAM_URL = (
+    'https://steamcommunity.com/market/search/render/'
+    '?appid=730&norender=1&count=100&sort_column=popular&sort_dir=desc&start={start}'
+)
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json',
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/120.0.0.0 Safari/537.36'
+    ),
+    'Accept': '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
 }
 
-
-def fetch_url(url):
-    req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read()
+MAX_PAGES = 8   # 800 items max — plenty for the tracker
 
 
-def convert_csgotrader(raw):
-    data = json.loads(raw)
-    result = []
-    for name, item in data.items():
-        if not isinstance(item, dict):
-            continue
-        steam = item.get('steam', {})
-        if not isinstance(steam, dict):
-            continue
-        p24  = steam.get('last_24h')
-        p7d  = steam.get('last_7d')
-        p30d = steam.get('last_30d')
-        price = p24 or p7d or p30d
-        if not price:
-            continue
+def fetch_steam():
+    all_items = []
+    for page in range(MAX_PAGES):
+        start = page * 100
+        url = STEAM_URL.format(start=start)
+        print(f'Fetching page {page + 1} (start={start})…')
         try:
-            result.append({
-                'market_hash_name': name,
-                'currency': 'USD',
-                'suggested_price': round(float(price), 2),
-                'price_7d':  round(float(p7d),  2) if p7d  else None,
-                'price_30d': round(float(p30d), 2) if p30d else None,
-                'min_price':  round(float(p7d  or price), 2),
-                'max_price':  round(float(p30d or price), 2),
-                'mean_price': round(float(p7d  or price), 2),
-                'quantity': 1,
-            })
-        except (ValueError, TypeError):
-            continue
-    return result
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read())
 
+            results = data.get('results', [])
+            if not results:
+                print('No more results, stopping.')
+                break
 
-def try_csgotrader():
-    for url in SOURCES:
-        try:
-            print(f'Trying {url}')
-            raw = fetch_url(url)
-            result = convert_csgotrader(raw)
-            if result:
-                print(f'OK: {len(result)} items from {url}')
-                return result
+            for item in results:
+                price_cents = item.get('sell_price', 0)
+                if price_cents <= 0:
+                    continue
+                price = round(price_cents / 100, 2)
+                all_items.append({
+                    'market_hash_name': item.get('hash_name', ''),
+                    'currency': 'USD',
+                    'suggested_price': price,
+                    'min_price': price,
+                    'max_price': price,
+                    'mean_price': price,
+                    'quantity': max(1, item.get('sell_listings', 1)),
+                })
+
+            print(f'  → {len(results)} items (total so far: {len(all_items)})')
+
+            if len(results) < 100:
+                break
+
+            time.sleep(1)  # be polite to Steam
+
         except Exception as e:
-            print(f'  failed: {e}', file=sys.stderr)
-    return None
+            print(f'  Page {page + 1} failed: {e}', file=sys.stderr)
+            if all_items:
+                break   # use what we have
+            raise
 
-
-def try_skinport():
-    try:
-        print(f'Trying Skinport')
-        raw = fetch_url(SKINPORT_URL)
-        data = json.loads(raw)
-        if isinstance(data, list) and data:
-            print(f'OK: {len(data)} items from Skinport')
-            return data
-    except Exception as e:
-        print(f'  Skinport failed: {e}', file=sys.stderr)
-    return None
+    return all_items
 
 
 if __name__ == '__main__':
     os.makedirs('data', exist_ok=True)
 
-    result = try_csgotrader() or try_skinport()
+    try:
+        result = fetch_steam()
+    except Exception as e:
+        print(f'ERROR: Steam fetch failed: {e}', file=sys.stderr)
+        sys.exit(1)
 
     if not result:
-        print('ERROR: all sources failed', file=sys.stderr)
+        print('ERROR: no items fetched', file=sys.stderr)
         sys.exit(1)
 
     out_path = 'data/prices.json'
     with open(out_path, 'w', encoding='utf-8') as f:
         json.dump(result, f)
 
-    print(f'Written {len(result)} items to {out_path}')
+    print(f'Done — wrote {len(result)} items to {out_path}')
